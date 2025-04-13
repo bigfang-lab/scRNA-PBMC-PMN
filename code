@@ -1,0 +1,172 @@
+####相关加载包####
+rm(list = ls())
+suppressMessages(library(Seurat))
+library(dplyr)
+library(BiocManager)
+library(clusterProfiler)
+library(ggplot2)
+library(msigdbr)
+library(tidyverse)
+####读取全部数据####
+scRNA <- readRDS("scRNA.rds")
+table(Idents(scRNA))
+Idents(scRNA) <- scRNA$major_celltype
+####筛选出B_Cell_Plasma####
+sce=subset(scRNA,idents ="B_Cell_Plasma")
+####查看组间及样本之间的分布####
+table(sce$sample_id)
+table(sce$group)
+####数据初步处理####
+sce <- NormalizeData(object = sce)
+sce <- ScaleData(object = sce)
+sce <- FindVariableFeatures(sce, selection.method = "vst")
+sce <- RunPCA(sce, features = VariableFeatures(sce))
+### 选择0.5 位cluster数
+table(sce$RNA_snn_res.0.5,sce$group)
+plot1 = DimPlot(sce, reduction = "umap", group.by = "group",label=F)
+plot1
+plot2 = DimPlot(sce, reduction = "umap", group.by = "RNA_snn_res.0.5", label=T)
+plot2
+plot3 = DimPlot(sce, reduction = "umap",group.by ="sample_name", label=F)
+plot3
+plotc <-plot1+plot2+plot3
+plotc
+####筛选每群中的Maker基因####
+Markers <- FindAllMarkers(object = sce, only.pos = TRUE, min.pct = 0.25, thresh.use = 0.25)
+####前20位
+Top10 <- Markers %>% group_by(cluster) %>% top_n(10, avg_log2FC)
+
+####MARKER文件####
+naive_cell = c( "IGHD", "TCL1A","IL4R","FCER2")
+Plasma_cell = c("CD38", "MZB1", "CD27","TNFRSF17")
+memory_B_cell = c("IGHG1","AIM2", "TNFRSF13B","MS4A1")
+Breg = c("CD5","CD1D","TLR4","GZMB","TGFB1")
+# Atypical_B_cell = c("CD72","FCRL5","ITGAX","LILRB2","LILRB1")
+# Immature_B_cell = c("CD10","CD74","CD79A","CD83","HLA-DPB1","HLA-DRA","HLA-DRB1")
+# Mature_B_cell = c("CD37","CD74","CD79A","CD83","IGHM","HLA-DRA","LYN")
+# UnSw_MB = c("CD19","CD20","CD27","IGHD","IGHM")
+# Breg = c("GZMB","MME","CD5","CD1D","HAVCR2","PTPRC","CD80","CD86","PRDM1",
+#          "ITGAM","TLR4","CD24","CD27") 
+
+############################################################
+
+####根据基因表达进行注释####
+VlnPlot(sce, features = naive_cell,pt.size = 0)
+DotPlot(sce, features = naive_cell)
+##### naive B cells  0/1群  ######
+VlnPlot(sce, features = Plasma_cell,pt.size = 0)
+DotPlot(sce, features = Plasma_cell)
+##### Plasma cells  5群  ######
+VlnPlot(sce, features = memory_B_cell,pt.size = 0)
+DotPlot(sce, features = memory_B_cell)
+##### memory B cells 2/3群  ######
+VlnPlot(sce, features = Breg,pt.size = 0)
+DotPlot(sce, features = Breg)
+##### Regulatory B CellS 4群  ######
+
+################################################################################
+############################判断完成后进行注释##################################
+celltype=data.frame(ClusterID=0:5,celltype= '') 
+celltype[celltype$ClusterID %in% c(0,1),2]='Naive_B_Cell' 
+celltype[celltype$ClusterID %in% c(2,3),2]='Memory_B_Cell' 
+celltype[celltype$ClusterID %in% c(4),2]='Regulatory_B_Cell' 
+celltype[celltype$ClusterID %in% c(5),2]='Plasma_cell' 
+celltype
+for(i in 1:nrow(celltype)){
+  sce@meta.data[which(sce@meta.data$RNA_snn_res.0.5 == celltype$ClusterID[i]),'celltype_B'] <- celltype$celltype[i]}
+################################################################################
+############################简单查看一下分布情况################################
+table(sce$group,sce$celltype_B)
+table(sce$sample_name,sce$celltype_B)
+#####################################UMAP图绘制#################################
+###############################定义函数################################
+get_metadata<-function(obj, color){
+  metadata<-obj@meta.data
+  metadata$Cluster<-obj@active.ident
+  metadata$UMAP1<-as.numeric(obj@reductions$umap@cell.embeddings[,1])
+  metadata$UMAP2<-as.numeric(obj@reductions$umap@cell.embeddings[,2])
+  metadata$TSNE1<-as.numeric(obj@reductions$tsne@cell.embeddings[,1])
+  metadata$TSNE2<-as.numeric(obj@reductions$tsne@cell.embeddings[,2])
+  color_df<-data.frame(Cluster=levels(obj), Colors=color)
+  cellnames<-rownames(metadata)
+  metadata$cells<-rownames(metadata)
+  metadata<-merge(metadata, color_df, by='Cluster')
+  rownames(metadata)<-metadata$cells
+  metadata<-metadata[cellnames,]
+}
+###############################初步处理################################
+table(Idents(sce))
+Idents(sce)<- sce$celltype_B
+#########调取色板#########
+library(ggsci)
+library("scales")
+pal_npg("nrc")(10)
+show_col(pal_npg("nrc")(10))
+
+#########颜色使用#########
+col_use<-c("#E64B35FF","#4DBBD5FF","#00A087FF","#3C5488FF")
+##########获取UMAP对象#########
+umap<-get_metadata(sce, color = col_use)
+umap$Celltype = umap$celltype_B
+###########UMAP画图##########
+p <- ggplot(umap,aes(x= UMAP1 , y = UMAP2 ,color = Celltype)) +  
+  geom_point(size =0.8, alpha =1)  +  
+  scale_color_manual(values = col_use)+
+  guides(color = guide_legend(override.aes = list(size=5)))+
+  theme_light(base_size = 12)+labs(title = "")+
+  theme(panel.border = element_rect(fill=NA,color="black", size=1))+
+  theme(plot.title = element_text(hjust = 0.5),
+        panel.background = element_blank(),panel.grid = element_blank())
+
+p
+###########添加标签##########
+library(dplyr)
+cell_type_med <- umap %>%
+  group_by(Celltype) %>%
+  summarise(UMAP1 = median(UMAP1),UMAP2 = median(UMAP2))
+library(ggrepel)
+p2<- p +theme(legend.position = "none")
+p2
+
+###############################Maker基因可视化#################################
+##########标志基因##########
+naive_cell = c( "IGHD", "TCL1A","IL4R","FCER2")
+Plasma_cell = c("CD38", "MZB1", "CD27","TNFRSF17")
+memory_B_cell = c("IGHG1","AIM2", "TNFRSF13B","MS4A1")
+Breg = c("CD5","CD1D","TLR4","GZMB","TGFB1")
+Markers = c(memory_B_cell,naive_cell,Plasma_cell,Breg)
+##########Maker表达矩阵提取##########
+table(Idents(sce))
+Idents(sce) = factor(sce$celltype_B,
+                     levels =c("Memory_B_Cell","Naive_B_Cell","Plasma_cell","Regulatory_B_Cell") )
+expr<- AverageExpression(sce,assays = "RNA",slot = "data")[[1]]
+expr <- expr[rowSums(expr)>0,]
+expr <- as.matrix(expr)
+expr <- expr[Markers,]
+colnames(expr)
+head(expr)
+#############注释信息补充###########
+#########细胞类型#########
+annotation_col <- data.frame(
+  Cell_Type =c("Memory_B_Cell","Naive_B_Cell","Plasma_cell","Regulatory_B_Cell"))
+rownames(annotation_col) <- colnames(expr)
+#########颜色配置#########
+ann_colors = list(Cell_Type = c("Memory_B_Cell" = "#E64B35FF",
+                               "Naive_B_Cell" = "#4DBBD5FF",
+                               "Plasma_cell" ="#00A087FF",
+                              "Regulatory_B_Cell" = "#3C5488FF" ))
+#########进行绘图#########
+p <- pheatmap::pheatmap(expr,show_colnames = F,show_rownames = T,
+                        scale = "row",
+                        border_color ="Black",
+                        cluster_cols = F,cluster_rows = F,
+                        annotation_colors = ann_colors,
+                        gaps_row = c(4,8,12),
+                        gaps_col = c(1,2,3,4),
+                        fontsize = 12,
+                        legend_breaks = c(-2:2),
+                        annotation_col = annotation_col,
+                        annotation_legend = T,
+                        cellwidth = 25,
+                        color = colorRampPalette(c("#3C5488FF","white","#E64B35FF"))(10))
+p
